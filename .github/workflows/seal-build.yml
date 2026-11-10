@@ -1,0 +1,75 @@
+name: seal-build
+
+# Upstream log4j 1.2 has no GitHub Actions CI (it was built with Maven 2 and
+# tested through the Ant suite in tests/build.xml, which the pom's antrun
+# "runAll" execution invokes during the Maven test phase). This workflow runs
+# that same build: `mvn package`, which compiles, runs tests/build.xml runAll
+# and packages the OSGi bundle jar.
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Space/comma separated tests/build.xml targets to run instead of runAll (e.g. Core PatternParser)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MAVEN_VERSION: 3.6.3
+      ANT_VERSION: 1.9.16
+    steps:
+      - uses: actions/checkout@v4
+
+      # The pom compiles with -source/-target 1.4 and its test suite with 1.1;
+      # JDK 7 is the newest javac that still accepts both.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "7"
+
+      # Maven 3.6.3 is the last Maven line that still runs on Java 7.
+      - name: Install Maven ${{ env.MAVEN_VERSION }}
+        run: |
+          curl -fsSL "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/apache-maven-${MAVEN_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Show toolchain
+        run: |
+          java -version
+          mvn -v
+
+      - name: Build and test (full suite)
+        if: ${{ inputs.test-filter == '' }}
+        run: mvn -B -V clean package -Dmaven.site.skip=true
+
+      # Scoped run: compile everything (no Maven test phase), run only the
+      # selected tests/build.xml targets, then package the bundle jar.
+      - name: Build and test (selected tests)
+        if: ${{ inputs.test-filter != '' }}
+        run: |
+          curl -fsSL "https://archive.apache.org/dist/ant/binaries/apache-ant-${ANT_VERSION}-bin.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          mvn -B -V clean test-compile -Dmaven.site.skip=true
+          TARGETS=$(echo "${{ inputs.test-filter }}" | tr ',' ' ')
+          # The runner presets ANT_HOME to its own Ant 1.10 (Java 8 bytecode),
+          # which bin/ant would otherwise launch; point it at the Java 7-capable Ant.
+          export ANT_HOME="$RUNNER_TEMP/apache-ant-${ANT_VERSION}"
+          (cd tests && "$ANT_HOME/bin/ant" \
+            -Dm2_repo="$HOME/.m2/repository" \
+            -Dlog4j.jar="$GITHUB_WORKSPACE/target/classes" \
+            -Dproject.lib.home="$GITHUB_WORKSPACE/target" \
+            $TARGETS)
+          mvn -B org.apache.felix:maven-bundle-plugin:2.1.0:bundle -Dmaven.site.skip=true
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: log4j-jar
+          path: |
+            target/log4j-*.jar
+            !target/log4j-*-sources.jar
+            !target/log4j-*-javadoc.jar
+          if-no-files-found: error

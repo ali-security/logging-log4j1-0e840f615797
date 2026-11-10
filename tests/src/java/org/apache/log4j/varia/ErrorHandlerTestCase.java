@@ -53,6 +53,18 @@ public class ErrorHandlerTestCase extends TestCase {
     super(name);
   }
 
+  /**
+   * Run test1 before test2 (declaration order, as on JDK 6). JDK 7+ returns
+   * reflected methods in arbitrary order, and test2 reads output/temp that
+   * the FALLBACK FileAppender in test1's configuration creates.
+   */
+  public static junit.framework.Test suite() {
+    junit.framework.TestSuite suite = new junit.framework.TestSuite();
+    suite.addTest(new ErrorHandlerTestCase("test1"));
+    suite.addTest(new ErrorHandlerTestCase("test2"));
+    return suite;
+  }
+
   public void setUp() {
     root = Logger.getRootLogger();
     logger = Logger.getLogger("test");
